@@ -151,6 +151,7 @@ h2{font-size:19px; font-weight:600; margin-bottom:4px; letter-spacing:-.3px}
   <span class="logo">Temp <b>Cal</b> 전자 기록 <small style="font-size:10px;color:#999">시트 제작 시스템</small></span>
   <span class="spacer"></span>
   <span class="who" id="whoBox"></span>
+  <button class="iconbtn" id="homeBtn" style="display:none">설비 목록</button>
   <button class="iconbtn" id="adminBtn">관리</button>
 </header>
 <main id="app"></main>
@@ -374,7 +375,8 @@ async function loadBase(){
     await DB.put('kv','hp_rot180_v1',1);
   }
   S.equips  = (await DB.get('kv','equips'))  || [];
-  S.workers = (await DB.get('kv','workers')) || [];
+  S.workers = [];
+  DB.del('kv','workers').catch(()=>{});   // 기존에 저장된 작업자 이름 기록 제거
   const lw = sessionStorage.getItem('tc_worker');
   if(lw){ S.worker = lw; S.view='list'; }
 }
@@ -564,6 +566,7 @@ function render(){
   else if(S.view==='equip') renderEquip(el);
   else if(S.view==='area') renderArea(el);
   const ch=$('#chWorker'); if(ch) ch.onclick=e=>{e.preventDefault(); S.view='login'; render();};
+  $('#homeBtn').style.display = (S.worker && S.view!=='login') ? '' : 'none';
 }
 
 /* ---- 로그인 ---- */
@@ -573,18 +576,15 @@ function renderLogin(el){
     <div class="mark">Temp <b>Cal</b></div>
     <p>온도 교정 전자 기록 시스템<br>작업자 이름을 입력하고 시작하세요</p>
     <input id="wname" placeholder="작업자 이름" autocomplete="off" value="${esc(S.worker||'')}">
-    <div class="chips">${S.workers.map(w=>`<button class="chip" data-w="${esc(w)}">${esc(w)}</button>`).join('')}</div>
     <button class="btn red" id="goBtn" style="width:100%">시작</button>
   </div>`;
   const go = async name=>{
     name=name.trim(); if(!name){ $('#wname').focus(); return; }
     S.worker=name; sessionStorage.setItem('tc_worker',name);
-    if(!S.workers.includes(name)){ S.workers.unshift(name); S.workers=S.workers.slice(0,12); await saveWorkers(); }
     S.view='list'; render();
   };
   $('#goBtn').onclick=()=>go($('#wname').value);
   $('#wname').onkeydown=e=>{ if(e.key==='Enter') go(e.target.value); };
-  el.querySelectorAll('.chip').forEach(c=>c.onclick=()=>go(c.dataset.w));
 }
 
 /* ---- 설비 목록 ---- */
@@ -593,19 +593,23 @@ function renderList(el){
     <h2>설비 목록</h2>
     <div class="desc">설비 번호를 입력해 등록하고, 설비를 선택해 측정을 진행하세요. 5개 영역이 모두 완료되어야 설비 1대가 완료 처리됩니다.</div>
     <div class="add-row">
-      <input id="eqInput" placeholder="설비 번호 입력 (예: TW154V__0047)" autocomplete="off">
+      <input id="eqModel" placeholder="모델명 (예: TW154V)" autocomplete="off">
+      <input id="eqUnit" placeholder="설비 호기 (예: 0047)" autocomplete="off">
       <button class="btn primary" id="eqAdd">등록</button>
     </div>
     <div id="eqList"></div>`;
   const add = async ()=>{
-    const id = $('#eqInput').value.trim();
-    if(!id) return;
+    const model=$('#eqModel').value.trim(), unit=$('#eqUnit').value.trim();
+    if(!model){ $('#eqModel').focus(); return; }
+    if(!unit){ $('#eqUnit').focus(); return; }
+    const id = `${model}-${unit}`.replace(/[|/]/g,'_');   // 표시 및 저장 키: 모델명-설비호기
     if(S.equips.find(e=>e.id===id)){ toast('이미 등록된 설비'); return; }
-    S.equips.unshift({id, createdAt:today(), by:S.worker});
-    await saveEquips(); $('#eqInput').value=''; drawList();
+    S.equips.unshift({id, model, unit, createdAt:today(), by:S.worker});
+    await saveEquips(); $('#eqModel').value=''; $('#eqUnit').value=''; drawList();
   };
   $('#eqAdd').onclick=add;
-  $('#eqInput').onkeydown=e=>{ if(e.key==='Enter') add(); };
+  $('#eqModel').onkeydown=e=>{ if(e.key==='Enter') $('#eqUnit').focus(); };
+  $('#eqUnit').onkeydown=e=>{ if(e.key==='Enter') add(); };
 
   async function drawList(){
     const box=$('#eqList');
@@ -1175,6 +1179,7 @@ async function exportExcel(eqId, areaKey){
 
 /* ================= 시작 ================= */
 $('#adminBtn').onclick=openAdmin;
+$('#homeBtn').onclick=()=>{ S.view='list'; render(); };
 $('#modalBg').onclick=e=>{ if(e.target.id==='modalBg') $('#modalBg').classList.remove('open'); };
 (async ()=>{
   try{ await DB.open(); }
