@@ -95,8 +95,8 @@ h2{font-size:19px; font-weight:600; margin-bottom:4px; letter-spacing:-.3px}
 .refwrap img{max-width:100%; max-height:420px; border-radius:8px}
 .refwrap .cap{font-size:11px; color:var(--sub); margin-top:6px}
 .ref2{display:flex; gap:12px; justify-content:center; flex-wrap:wrap}
-.ref2 > div{flex:1; min-width:260px; max-width:440px}
-.ref2 img{width:100%; max-height:none}
+.ref2 > div{flex:0 1 320px; min-width:230px; max-width:320px}
+.ref2 img{width:100%; max-height:240px; object-fit:contain}
 .ref2lb{font-size:12px; font-weight:600; color:var(--sub); margin-bottom:5px; text-align:left}
 
 .blocklabel{font-size:13px; font-weight:600; color:var(--sub); margin:16px 0 8px}
@@ -162,7 +162,7 @@ const DEFAULT_REFS = {"hotplate": {"d": "data:image/jpeg;base64,/9j/4AAQSkZJRgAB
 </script>
 <script>
 /* ================= 기본 설정 ================= */
-const PTS_HOTPLATE = [{x:.13,y:.82},{x:.13,y:.52},{x:.13,y:.20},{x:.50,y:.45},{x:.87,y:.82},{x:.87,y:.52},{x:.87,y:.20}];
+const PTS_HOTPLATE = [{x:.12,y:.17},{x:.50,y:.17},{x:.88,y:.17},{x:.50,y:.50},{x:.12,y:.80},{x:.50,y:.80},{x:.88,y:.80}];
 const PTS_SHUTTLE  = [{x:.18,y:.20},{x:.50,y:.20},{x:.82,y:.20},{x:.50,y:.50},{x:.18,y:.79},{x:.50,y:.79},{x:.82,y:.79}];
 const PTS_INDEXARM = [{x:.188,y:.27},{x:.396,y:.27},{x:.604,y:.27},{x:.812,y:.27},
                       {x:.188,y:.715},{x:.396,y:.715},{x:.604,y:.715},{x:.812,y:.715}];
@@ -355,6 +355,14 @@ async function loadBase(){
       S.areas.push(JSON.parse(JSON.stringify(def)));
     }
   });
+
+  // Hot Plate 측정 포인트를 가로 배열(상단 1,2,3 / 중앙 4 / 하단 5,6,7)로 1회 이관 — 기준 사진은 유지
+  if(!(await DB.get('kv','hp_pts_h_v1'))){
+    const hp=S.areas.find(a=>a.key==='hotplate');
+    if(hp) hp.pts=JSON.parse(JSON.stringify(PTS_HOTPLATE));
+    await DB.put('kv','areas',S.areas);
+    await DB.put('kv','hp_pts_h_v1',1);
+  }
 
   S.areas.forEach(a=>{
     if(!a.pts){
