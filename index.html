@@ -50,7 +50,7 @@ h2{font-size:19px; font-weight:600; margin-bottom:4px; letter-spacing:-.3px}
 .chip:active{background:var(--soft)}
 
 /* equipment list */
-.add-row{display:flex; gap:8px; margin-bottom:20px}
+.add-row{display:flex; gap:8px; margin-bottom:20px; flex-wrap:wrap}
 .add-row input{flex:1; border:1px solid var(--line); border-radius:10px; padding:11px 13px}
 .add-row input:focus{outline:none; border-color:var(--ink)}
 .eq-card{border:1px solid var(--line); border-radius:12px; padding:14px 16px; margin-bottom:10px; display:flex; align-items:center; gap:14px; background:#fff}
@@ -338,7 +338,7 @@ async function migrateLocalToFirebase(){
 
 /* ================= 상태 ================= */
 const S = { worker:null, view:'login', equipId:null, areaKey:null, temp:null,
-            equips:[], workers:[], areas:null, refs:null, recs:{} };
+            equips:[], workers:[], areas:null, refs:null, recs:{}, recipes:[] };
 
 const recKey = (eq,ak,t,i)=>`${eq}|${ak}|${t}|${i}`;
 
@@ -381,6 +381,7 @@ async function loadBase(){
   await DB.put('kv','areas',S.areas);
 
   S.refs    = (await DB.get('kv','refs'))    || JSON.parse(JSON.stringify(DEFAULT_REFS));
+  S.recipes = (await DB.get('kv','recipes')) || [];
 
   S.equips  = (await DB.get('kv','equips'))  || [];
   S.workers = [];
@@ -406,6 +407,19 @@ const saveEquips  = ()=>DB.put('kv','equips',S.equips);
 const saveWorkers = ()=>DB.put('kv','workers',S.workers);
 const saveAreas   = ()=>DB.put('kv','areas',S.areas);
 const saveRefs    = ()=>DB.put('kv','refs',S.refs);
+const saveRecipes = ()=>DB.put('kv','recipes',S.recipes);
+
+/* ================= 설비별 레시피(온도/GB) 적용 ================= */
+// 설비가 등록 시 레시피를 선택했다면 그 설비만의 온도·GB(eq.areasCfg)를 쓰고,
+// 없으면 기존과 동일하게 공통 기본값(S.areas)을 그대로 사용한다 — 기존 설비는 100% 그대로 동작.
+function resolveArea(eqId, areaKey){
+  const base = S.areas.find(a=>a.key===areaKey);
+  if(!base) return base;
+  const eq = S.equips.find(e=>e.id===eqId);
+  const custom = eq && eq.areasCfg && eq.areasCfg[areaKey];
+  if(custom && custom.length) return {...base, temps:custom};
+  return base;
+}
 
 /* ================= 진행률 ================= */
 function areaStat(eqId, area){
@@ -423,7 +437,7 @@ function areaStat(eqId, area){
 }
 function equipStat(eqId){
   let val=0,total=0,oot=0,doneAreas=0;
-  S.areas.forEach(a=>{ const s=areaStat(eqId,a); val+=s.val; total+=s.total; oot+=s.oot; if(s.done)doneAreas++; });
+  S.areas.forEach(a=>{ const s=areaStat(eqId,resolveArea(eqId,a.key)); val+=s.val; total+=s.total; oot+=s.oot; if(s.done)doneAreas++; });
   return {val,total,oot,doneAreas,done:doneAreas===S.areas.length};
 }
 
@@ -581,6 +595,10 @@ function renderList(el){
     <div class="add-row">
       <input id="eqModel" placeholder="모델명 (예: TW154V)" autocomplete="off">
       <input id="eqUnit" placeholder="설비 호기 (예: 0047)" autocomplete="off">
+      <select id="eqRecipe" style="border:1px solid var(--line);border-radius:10px;padding:0 12px;min-width:160px">
+        <option value="">레시피 (공통 기본값)</option>
+        ${S.recipes.map(rc=>`<option value="${esc(rc.id)}">${esc(rc.name)}</option>`).join('')}
+      </select>
       <button class="btn primary" id="eqAdd">등록</button>
     </div>
     <div id="eqList"></div>`;
@@ -590,8 +608,12 @@ function renderList(el){
     if(!unit){ $('#eqUnit').focus(); return; }
     const id = `${model}-${unit}`.replace(/[|/]/g,'_');   // 표시 및 저장 키: 모델명-설비호기
     if(S.equips.find(e=>e.id===id)){ toast('이미 등록된 설비'); return; }
-    S.equips.unshift({id, model, unit, createdAt:today(), by:S.worker});
-    await saveEquips(); $('#eqModel').value=''; $('#eqUnit').value=''; drawList();
+    const rcId=$('#eqRecipe').value;
+    const rc = rcId? S.recipes.find(x=>x.id===rcId) : null;
+    S.equips.unshift({id, model, unit, createdAt:today(), by:S.worker,
+      recipeId: rc? rc.id : null, recipeName: rc? rc.name : null,
+      areasCfg: rc? JSON.parse(JSON.stringify(rc.areas)) : null});
+    await saveEquips(); $('#eqModel').value=''; $('#eqUnit').value=''; $('#eqRecipe').value=''; drawList();
   };
   $('#eqAdd').onclick=add;
   $('#eqModel').onkeydown=e=>{ if(e.key==='Enter') $('#eqUnit').focus(); };
@@ -614,7 +636,7 @@ function renderList(el){
             ${s.done?'<span class="badge done">완료</span>':`<span class="badge ing">${s.doneAreas}/5 영역</span>`}
             ${s.oot?`<span class="badge oot">GB 초과 ${s.oot}건</span>`:''}
           </div>
-          <div class="meta">등록 ${esc(eq.createdAt)} · ${esc(eq.by||'')} · 입력 ${s.val}/${s.total}</div>
+          <div class="meta">등록 ${esc(eq.createdAt)} · ${esc(eq.by||'')} · 입력 ${s.val}/${s.total}${eq.recipeName?` · 레시피 ${esc(eq.recipeName)}`:''}</div>
           <div class="pbar"><i class="${s.done?'full':''}" style="width:${pct}%"></i></div>
         </div>
         <button class="linkdel" data-del="${esc(eq.id)}">✕</button>
@@ -638,6 +660,7 @@ function renderList(el){
 /* ---- 설비 상세 (영역 선택) ---- */
 function renderEquip(el){
   const eqId=S.equipId, st=equipStat(eqId);
+  const eq=S.equips.find(e=>e.id===eqId);
   el.innerHTML = `
     <div class="a-top">
       <button class="back" id="bk">‹ 목록</button>
@@ -646,16 +669,36 @@ function renderEquip(el){
       ${st.oot?`<span class="badge oot">GB 초과 ${st.oot}건</span>`:''}
     </div>
     <div class="desc">영역을 선택해 온도별 측정값과 사진을 입력하세요. 각 영역의 모든 온도 · 포인트 입력이 끝나면 영역 완료로 표시됩니다.</div>
+    <div class="refch" style="margin-bottom:14px">
+      레시피 <b>${esc(eq?.recipeName || '공통 기본값')}</b>
+      <select id="eqRcSel" style="border:1px solid var(--line);border-radius:8px;padding:6px 9px;font-size:13px">
+        <option value="">공통 기본값</option>
+        ${S.recipes.map(rc=>`<option value="${esc(rc.id)}" ${eq?.recipeId===rc.id?'selected':''}>${esc(rc.name)}</option>`).join('')}
+      </select>
+      <button class="btn ghost sm" id="eqRcApply">이 설비에 적용</button>
+    </div>
     <div style="display:flex;gap:8px;flex-wrap:wrap">
       <button class="btn primary sm" id="dlAll">전체 엑셀 다운로드</button>
     </div>
     <div class="area-grid" id="agrid"></div>`;
   $('#bk').onclick=()=>{ S.view='list'; render(); };
   $('#dlAll').onclick=()=>exportExcel(eqId, null);
+  $('#eqRcApply').onclick=async ()=>{
+    const rcId=$('#eqRcSel').value;
+    const rc = rcId? S.recipes.find(x=>x.id===rcId) : null;
+    if(!confirm(rc? `이 설비에 "${rc.name}" 레시피를 적용할까요? (다른 설비·공통 기본값은 영향 없음)`
+                  : '이 설비를 공통 기본값으로 되돌릴까요? (다른 설비는 영향 없음)')) return;
+    eq.recipeId = rc? rc.id : null;
+    eq.recipeName = rc? rc.name : null;
+    eq.areasCfg = rc? JSON.parse(JSON.stringify(rc.areas)) : null;
+    await saveEquips();
+    toast('이 설비의 레시피가 변경되었습니다'); render();
+  };
 
   const g=$('#agrid');
   g.innerHTML = S.areas.map(a=>{
-    const s=areaStat(eqId,a);
+    const ra=resolveArea(eqId,a.key);
+    const s=areaStat(eqId,ra);
     const ref=S.refs[a.key];
     return `<div class="area-card">
       <div class="thumb">${ref?`<img src="${ref.d}">`:''}</div>
@@ -665,7 +708,7 @@ function renderEquip(el){
           ${s.done?'<span class="badge done">완료</span>':''}
           ${s.oot?`<span class="badge oot">${s.oot}</span>`:''}
         </div>
-        <div class="st">입력 ${s.val}/${s.total} · 사진 ${s.photo} · ${a.temps.map(t=>t.t+'℃').join(' / ')}</div>
+        <div class="st">입력 ${s.val}/${s.total} · 사진 ${s.photo} · ${ra.temps.map(t=>t.t+'℃').join(' / ')}</div>
         <div class="pbar"><i class="${s.done?'full':''}" style="width:${s.total?Math.round(s.val/s.total*100):0}%"></i></div>
         <div class="acts">
           <button class="btn primary sm" data-in="${a.key}">입력</button>
@@ -676,7 +719,7 @@ function renderEquip(el){
   }).join('');
   g.querySelectorAll('[data-in]').forEach(b=>b.onclick=()=>{
     S.areaKey=b.dataset.in;
-    S.temp=S.areas.find(a=>a.key===S.areaKey).temps[0].t;
+    S.temp=resolveArea(eqId,S.areaKey).temps[0].t;
     S.view='area'; render();
   });
   g.querySelectorAll('[data-xl]').forEach(b=>b.onclick=()=>exportExcel(eqId, b.dataset.xl));
@@ -684,7 +727,7 @@ function renderEquip(el){
 
 /* ---- 영역 입력 ---- */
 function renderArea(el){
-  const area=S.areas.find(a=>a.key===S.areaKey);
+  const area=resolveArea(S.equipId,S.areaKey);
   const tp = area.temps.find(t=>t.t===S.temp) || area.temps[0];
   S.temp = tp.t;
 
@@ -833,21 +876,48 @@ function wireZoom(img){
 }
 
 /* ================= 관리 창 ================= */
-function openAdmin(){
-  const bg=$('#modalBg'), m=$('#modalBox');
-  bg.classList.add('open');
-  m.innerHTML = `
-    <h3>관리 — 온도 · 가드밴드 · 기준 사진</h3>
-    ${S.areas.map((a,ai)=>`
-      <div class="mod-area" data-ai="${ai}">
-        <div class="nm">${a.no}. ${esc(a.name)} <span style="font-weight:400;color:var(--sub);font-size:12px">(${pointCount(a)}포인트)</span></div>
-        <div class="trows">
-          ${a.temps.map((t,ti)=>`
-            <div class="trow" data-ti="${ti}">
+function trowHtml(t){
+  return `<div class="trow">
               <span class="u">온도</span><input type="number" step="0.1" class="tv" value="${t.t}">
               <span class="u">GB ±</span><input type="number" step="0.1" class="gv" value="${t.gb}">
               <button class="x" data-rm>✕</button>
-            </div>`).join('')}
+            </div>`;
+}
+function wireTrowRemovals(wrap){
+  wrap.querySelectorAll('[data-rm]').forEach(b=>b.onclick=()=>b.parentElement.remove());
+}
+function readAreaTemps(box){                 // 현재 화면에 표시된 값을 읽어옴 (레시피 저장/메인 저장 공용)
+  const temps=[];
+  box.querySelectorAll('.trow').forEach(r=>{
+    const t=Number(r.querySelector('.tv').value), gb=Number(r.querySelector('.gv').value);
+    if(!isNaN(t) && r.querySelector('.tv').value!=='') temps.push({t, gb:isNaN(gb)?0:gb});
+  });
+  return temps;
+}
+function openAdmin(){
+  const bg=$('#modalBg'), m=$('#modalBox');
+  bg.classList.add('open');
+  const rcOptions = ()=>`<option value="">레시피 선택…</option>`+
+    S.recipes.map(rc=>`<option value="${esc(rc.id)}">${esc(rc.name)}</option>`).join('');
+  m.innerHTML = `
+    <h3>관리 — 온도 · 가드밴드 · 기준 사진</h3>
+    <div class="mod-sec" style="margin-top:0;border-top:none;padding-top:0">
+      <div class="t">레시피 (모델별 온도·GB 프리셋 — 기준 사진은 공통 그대로 사용)</div>
+      <div class="row">
+        <select id="rcSel" style="border:1px solid var(--line);border-radius:8px;padding:7px 9px;font-size:13px;min-width:170px">${rcOptions()}</select>
+        <button class="btn ghost sm" id="rcLoad">불러오기 (폼에 채우기)</button>
+        <button class="btn primary sm" id="rcUpdate">선택 레시피에 저장</button>
+        <button class="btn ghost sm" id="rcSaveAs">새 레시피로 저장</button>
+        <button class="btn ghost sm" id="rcDel">선택 레시피 삭제</button>
+      </div>
+      <div class="desc" style="margin-top:6px">여기서는 레시피 자체만 만들고 편집합니다 — 공통 기본값이나 이미 등록된 설비는 자동으로 바뀌지 않습니다.
+      레시피는 <b>설비 등록 시</b> 선택하거나, 설비 화면의 <b>"이 설비에 적용"</b>으로 개별 설비를 선택해 적용하세요.</div>
+    </div>
+    ${S.areas.map((a,ai)=>`
+      <div class="mod-area" data-ai="${ai}" data-key="${esc(a.key)}">
+        <div class="nm">${a.no}. ${esc(a.name)} <span style="font-weight:400;color:var(--sub);font-size:12px">(${pointCount(a)}포인트)</span></div>
+        <div class="trows">
+          ${a.temps.map(trowHtml).join('')}
         </div>
         <button class="btn ghost sm" data-addt>+ 온도 추가</button>
         <div class="refch">기준 사진
@@ -890,7 +960,7 @@ function openAdmin(){
     d.querySelector('[data-rm]').onclick=()=>d.remove();
     wrap.appendChild(d);
   });
-  m.querySelectorAll('[data-rm]').forEach(b=>b.onclick=()=>b.parentElement.remove());
+  wireTrowRemovals(m);
   m.querySelectorAll('[data-ref]').forEach(inp=>inp.onchange=async ()=>{
     const box=inp.closest('.mod-area');
     const p=await compressImage(inp.files[0]);
@@ -898,15 +968,67 @@ function openAdmin(){
     box.querySelector('.refst').textContent='변경 예정 (저장 시 적용)';
   });
 
+  // ---- 레시피: 폼에 불러오기 / 선택 레시피에 저장(덮어쓰기) / 새로 저장 / 삭제 ----
+  // 주의: 아래 세 버튼은 S.recipes(레시피 목록)만 변경한다. 공통 기본값(S.areas)이나
+  // 이미 등록된 설비의 온도 설정은 절대 건드리지 않는다 — 실제 반영은 설비 등록/설비별 "이 설비에 적용"에서만 일어난다.
+  $('#rcLoad').onclick=()=>{
+    const id=$('#rcSel').value;
+    if(!id){ alert('불러올 레시피를 선택해주세요.'); return; }
+    const rc=S.recipes.find(x=>x.id===id);
+    if(!rc){ alert('레시피를 찾을 수 없습니다.'); return; }
+    m.querySelectorAll('.mod-area').forEach(box=>{
+      const key=box.dataset.key;
+      const temps=rc.areas && rc.areas[key];
+      if(!temps || !temps.length) return;                 // 레시피에 없는 존은 폼도 그대로 둠
+      const wrap=box.querySelector('.trows');
+      wrap.innerHTML = temps.map(trowHtml).join('');
+      wireTrowRemovals(wrap);
+    });
+    toast(`레시피 "${rc.name}" 내용을 폼에 채웠습니다 (아직 저장 전)`);
+  };
+  $('#rcUpdate').onclick=async ()=>{
+    const id=$('#rcSel').value;
+    if(!id){ alert('저장할 대상 레시피를 선택해주세요. (신규는 "새 레시피로 저장" 사용)'); return; }
+    const rc=S.recipes.find(x=>x.id===id);
+    if(!rc || !confirm(`현재 폼의 값으로 "${rc.name}" 레시피를 덮어쓸까요?`)) return;
+    const areas={};
+    m.querySelectorAll('.mod-area').forEach(box=>{
+      const temps=readAreaTemps(box);
+      if(temps.length) areas[box.dataset.key]=temps;
+    });
+    rc.areas=areas;
+    await saveRecipes();
+    toast(`레시피 "${rc.name}" 저장됨`);
+  };
+  $('#rcSaveAs').onclick=async ()=>{
+    const name=prompt('새 레시피 이름을 입력하세요 (예: 모델명)');
+    if(!name || !name.trim()) return;
+    const areas={};
+    m.querySelectorAll('.mod-area').forEach(box=>{
+      const temps=readAreaTemps(box);
+      if(temps.length) areas[box.dataset.key]=temps;
+    });
+    S.recipes.push({id:'rc_'+Date.now(), name:name.trim(), createdAt:today(), areas});
+    await saveRecipes();
+    $('#rcSel').innerHTML=rcOptions();
+    toast('레시피 저장됨');
+  };
+  $('#rcDel').onclick=async ()=>{
+    const id=$('#rcSel').value;
+    if(!id){ alert('삭제할 레시피를 선택해주세요.'); return; }
+    const rc=S.recipes.find(x=>x.id===id);
+    if(!rc || !confirm(`"${rc.name}" 레시피를 삭제할까요? (이미 이 레시피를 적용받은 설비의 데이터는 영향 없음)`)) return;
+    S.recipes=S.recipes.filter(x=>x.id!==id);
+    await saveRecipes();
+    $('#rcSel').innerHTML=rcOptions();
+    toast('레시피 삭제됨');
+  };
+
   $('#mClose').onclick=()=>bg.classList.remove('open');
   $('#mSave').onclick=async ()=>{
     m.querySelectorAll('.mod-area').forEach(box=>{
       const ai=Number(box.dataset.ai);
-      const temps=[];
-      box.querySelectorAll('.trow').forEach(r=>{
-        const t=Number(r.querySelector('.tv').value), gb=Number(r.querySelector('.gv').value);
-        if(!isNaN(t) && r.querySelector('.tv').value!=='') temps.push({t, gb:isNaN(gb)?0:gb});
-      });
+      const temps=readAreaTemps(box);
       if(temps.length) S.areas[ai].temps=temps;
     });
     for(const ai in pendingRefs) S.refs[S.areas[ai].key]=pendingRefs[ai];
@@ -917,7 +1039,7 @@ function openAdmin(){
 
   $('#bkExp').onclick=async ()=>{
     const recs=await DB.entries('rec','');
-    const data={ver:1, areas:S.areas, refs:S.refs, equips:S.equips, workers:S.workers,
+    const data={ver:1, areas:S.areas, refs:S.refs, equips:S.equips, workers:S.workers, recipes:S.recipes,
                 recs:Object.fromEntries(recs.map(r=>[r.k,r.v]))};
     const blob=new Blob([JSON.stringify(data)],{type:'application/json'});
     const a=document.createElement('a'); a.href=URL.createObjectURL(blob);
@@ -928,7 +1050,9 @@ function openAdmin(){
     if(!confirm('백업을 복원하면 현재 데이터를 덮어씁니다. 진행할까요?')) return;
     const data=JSON.parse(await f.text());
     S.areas=data.areas; S.refs=data.refs; S.equips=data.equips; S.workers=data.workers||[];
+    if(data.recipes) S.recipes=data.recipes;
     await saveAreas(); await saveRefs(); await saveEquips(); await saveWorkers();
+    if(data.recipes) await saveRecipes();
     for(const k in data.recs) await DB.put('rec',k,data.recs[k]);
     bg.classList.remove('open'); toast('복원 완료'); S.view='list'; render();
   };
@@ -1187,7 +1311,7 @@ async function exportExcel(eqId, areaKey){
   toast('엑셀 생성 중…');
   try{
     const wb=new ExcelJS.Workbook();
-    const areas = areaKey? [S.areas.find(a=>a.key===areaKey)] : S.areas;
+    const areas = (areaKey? [S.areas.find(a=>a.key===areaKey)] : S.areas).map(a=>resolveArea(eqId,a.key));
     for(const a of areas){
       for(let ti=0; ti<a.temps.length; ti++) await buildSheet(wb,eqId,a,a.temps[ti],ti);
     }
