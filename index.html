@@ -357,11 +357,11 @@ async function loadBase(){
   });
 
   // Hot Plate 측정 포인트를 가로 배열(상단 1,2,3 / 중앙 4 / 하단 5,6,7)로 1회 이관 — 기준 사진은 유지
-  if(!(await DB.get('kv','hp_pts_h_v1'))){
+  if(!(await DB.get('kv','hp_pts_h_v2'))){
     const hp=S.areas.find(a=>a.key==='hotplate');
     if(hp) hp.pts=JSON.parse(JSON.stringify(PTS_HOTPLATE));
     await DB.put('kv','areas',S.areas);
-    await DB.put('kv','hp_pts_h_v1',1);
+    await DB.put('kv','hp_pts_h_v2',1);
   }
 
   S.areas.forEach(a=>{
